@@ -1,0 +1,12 @@
+[package]
+name = "spart"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+eframe = "0.29.1"
+egui_plot = "0.29.0"
+merde = { version = "10.0.0", features = ["json"] }
+fxhash = "0.2.1"
+thiserror = "2.0.4"
+ordered-float = "4.5.0"
