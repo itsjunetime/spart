@@ -20,7 +20,7 @@ pub fn make_bars(data: &[merde::Map], settings: &Settings) -> Vec<Bar> {
 				let exclude = settings
 					.bounds
 					.iter()
-					.flat_map(|(key, bound)| val.get(key).map(|field| (field, bound)))
+					.filter_map(|(key, bound)| val.get(key).map(|field| (field, bound)))
 					.any(|(field, bound)| match (field, bound) {
 						(Value::I64(val), ValueBound::I64(bound)) => bound.excludes(val),
 						(Value::U64(val), ValueBound::U64(bound)) => bound.excludes(val),
@@ -67,7 +67,7 @@ pub fn make_bars(data: &[merde::Map], settings: &Settings) -> Vec<Bar> {
 				}
 
 				bars.push(
-					Bar::new(bars.len() as f64, count as f64).name(
+					Bar::new(bars.len() as f64, count.into()).name(
 						old_vals
 							.iter()
 							.map(|s| format!("{s:?}"))

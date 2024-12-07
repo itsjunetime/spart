@@ -118,8 +118,7 @@ impl ValueBound {
 			ValueType::Float => F64_ARR,
 			ValueType::String => STR_ARR,
 			ValueType::Bool => &[ValueBound::Bool(true), ValueBound::Bool(false)],
-			ValueType::Bytes => &[],
-			ValueType::Null => &[],
+			ValueType::Bytes | ValueType::Null => &[],
 			_ => unreachable!("These values should've been checked by this point")
 		}
 	}

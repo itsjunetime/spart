@@ -5,7 +5,6 @@ use merde::{IntoStatic, json::from_str};
 mod app;
 mod bars;
 mod settings;
-mod song;
 mod sort;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
