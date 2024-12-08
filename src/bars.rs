@@ -1,3 +1,5 @@
+use std::ops::Deref;
+
 use egui_plot::Bar;
 use merde::Value;
 use ordered_float::OrderedFloat;
@@ -20,7 +22,9 @@ pub fn make_bars(data: &[merde::Map], settings: &Settings) -> Vec<Bar> {
 				let exclude = settings
 					.bounds
 					.iter()
-					.filter_map(|(key, bound)| val.get(key).map(|field| (field, bound)))
+					.filter_map(|(key, bound)| {
+						val.get(&key.as_str().into()).map(|field| (field, bound))
+					})
 					.any(|(field, bound)| match (field, bound) {
 						(Value::I64(val), ValueBound::I64(bound)) => bound.excludes(val),
 						(Value::U64(val), ValueBound::U64(bound)) => bound.excludes(val),
@@ -28,8 +32,8 @@ pub fn make_bars(data: &[merde::Map], settings: &Settings) -> Vec<Bar> {
 							bound.excludes(&val.into_inner()),
 						(Value::Bool(val), ValueBound::Bool(bound)) => val != bound,
 						(Value::Str(val), ValueBound::Str { include, values }) => match include {
-							Inclusion::Include => !values.contains(val),
-							Inclusion::Exclude => values.contains(val)
+							Inclusion::Include => !values.iter().any(|s| s == val.deref()),
+							Inclusion::Exclude => values.iter().any(|s| s == val.deref())
 						},
 						(Value::Bytes(_), _) => false,
 						// Let's just say that having any bound at all excludes nulls
@@ -47,7 +51,7 @@ pub fn make_bars(data: &[merde::Map], settings: &Settings) -> Vec<Bar> {
 				let old_vals = settings
 					.x_axis
 					.iter()
-					.map(|key| &val[key])
+					.map(|key| &val[&key.as_str().into()])
 					.collect::<Vec<_>>();
 
 				let mut count = 1;
@@ -56,7 +60,7 @@ pub fn make_bars(data: &[merde::Map], settings: &Settings) -> Vec<Bar> {
 						.x_axis
 						.iter()
 						.zip(old_vals.iter())
-						.all(|(next_key, old_val)| &next[next_key] == *old_val);
+						.all(|(next_key, old_val)| &next[&next_key.as_str().into()] == *old_val);
 
 					if matches {
 						count += 1;

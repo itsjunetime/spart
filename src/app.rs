@@ -4,12 +4,12 @@ use std::{
 };
 
 use eframe::{
-	egui::{self, Align, ComboBox, Layout, Slider, UiBuilder, Vec2b},
+	egui::{self, Align, ComboBox, Key, Layout, Slider, UiBuilder, Vec2b},
 	emath::Numeric
 };
 use egui_plot::{Bar, BarChart, Plot};
 use fxhash::FxHashMap;
-use merde::{CowStr, ValueType};
+use merde::ValueType;
 
 use crate::{
 	bars::make_bars,
@@ -28,7 +28,7 @@ pub struct App {
 	// Invariant: Each `Map` inside this vec has the same schema, and contains no nested data
 	// structures - no inner `Map`s or `Array`s. It is also not empty.
 	data: Vec<merde::Map<'static>>,
-	keys: Vec<(CowStr<'static>, ValueType)>,
+	keys: Vec<(String, ValueType)>,
 	settings: Settings<'static>,
 	pub bars: Vec<Bar>
 }
@@ -79,9 +79,9 @@ impl App {
 			}
 		}
 
-		let mut keys: Vec<(CowStr<'static>, _)> = first
+		let mut keys: Vec<(String, _)> = first
 			.iter()
-			.map(|(k, v)| (k.clone(), v.value_type()))
+			.map(|(k, v)| (k.to_string(), v.value_type()))
 			.collect();
 
 		// sort_by_key requires returning a &str that borrows from the passed-in CowStr and the
@@ -97,25 +97,39 @@ impl App {
 		})
 	}
 
-	pub fn add_key(&mut self, key: CowStr<'static>) {
-		self.settings.x_axis.push(key);
-		self.rebuild_bars();
+	pub fn add_key(
+		key: String,
+		bars: &mut Vec<Bar>,
+		data: &mut [merde::Map<'static>],
+		settings: &mut Settings
+	) {
+		settings.x_axis.push(key);
+		Self::rebuild_bars(bars, data, settings);
 	}
 
-	pub fn remove_key(&mut self, key: &CowStr<'static>) {
-		if let Some(idx) = self.settings.x_axis.iter().position(|k| k == key) {
-			self.settings.x_axis.remove(idx);
+	pub fn remove_key(
+		key: &String,
+		bars: &mut Vec<Bar>,
+		data: &mut [merde::Map<'static>],
+		settings: &mut Settings
+	) {
+		if let Some(idx) = settings.x_axis.iter().position(|k| k == key) {
+			settings.x_axis.remove(idx);
 		}
-		self.rebuild_bars();
+		Self::rebuild_bars(bars, data, settings);
 	}
 
-	fn rebuild_bars(&mut self) {
-		let was_empty = self.bars.is_empty();
-		sort_arr(&mut self.data, &self.settings);
-		self.bars = make_bars(&self.data, &self.settings);
+	fn rebuild_bars(
+		bars: &mut Vec<Bar>,
+		data: &mut [merde::Map<'static>],
+		settings: &mut Settings
+	) {
+		let was_empty = bars.is_empty();
+		sort_arr(data, &*settings);
+		*bars = make_bars(data, &*settings);
 
 		if was_empty {
-			self.settings.max_shown = self.bars.len();
+			settings.max_shown = bars.len();
 		}
 	}
 }
@@ -134,19 +148,24 @@ impl eframe::App for App {
 			ui.vertical(|ui| {
 				ui.heading("Keys");
 
-				let mut key_to_add = None;
 				for (key, _) in &self.keys {
 					let selected = self.settings.x_axis.contains(key);
 					if ui.radio(selected, key.deref()).clicked() {
-						key_to_add = Some((key.clone(), selected));
-					}
-				}
-
-				if let Some((key, selected)) = key_to_add {
-					if selected {
-						self.remove_key(&key);
-					} else {
-						self.add_key(key);
+						if selected {
+							Self::remove_key(
+								key,
+								&mut self.bars,
+								&mut self.data,
+								&mut self.settings
+							);
+						} else {
+							Self::add_key(
+								key.clone(),
+								&mut self.bars,
+								&mut self.data,
+								&mut self.settings
+							);
+						}
 					}
 				}
 
@@ -175,12 +194,12 @@ impl eframe::App for App {
 						});
 
 					if let Some(bound) = self.settings.bounds.get_mut(key) {
-						show_bounds_configurations(bound, ui);
+						update_bars |= show_bounds_configurations(bound, ui);
 					}
 				}
 
 				if update_bars {
-					self.rebuild_bars();
+					Self::rebuild_bars(&mut self.bars, &mut self.data, &mut self.settings);
 				}
 			});
 
@@ -198,9 +217,9 @@ impl eframe::App for App {
 #[must_use]
 fn show_bounds_for_ty(
 	ui: &mut egui::Ui,
-	key: &CowStr<'static>,
+	key: &String,
 	ty: ValueType,
-	bounds: &mut FxHashMap<CowStr<'static>, ValueBound>
+	bounds: &mut FxHashMap<String, ValueBound>
 ) -> bool {
 	let mut current = bounds.get(key).cloned();
 	let available_bounds = ValueBound::base_options_for(ty);
@@ -229,7 +248,7 @@ fn show_bounds_for_ty(
 	}
 }
 
-fn show_bounds_configurations(bound: &mut ValueBound, ui: &mut egui::Ui) {
+fn show_bounds_configurations(bound: &mut ValueBound, ui: &mut egui::Ui) -> bool {
 	fn show_slider_for_range<N: Numeric>(range: &mut Range<N>, ui: &mut egui::Ui) {
 		ui.add(Slider::new(&mut range.start, N::MIN..=range.end));
 		let end = range.end;
@@ -240,6 +259,38 @@ fn show_bounds_configurations(bound: &mut ValueBound, ui: &mut egui::Ui) {
 		ValueBound::I64(Bound::Range(range)) => show_slider_for_range(range, ui),
 		ValueBound::U64(Bound::Range(range)) => show_slider_for_range(range, ui),
 		ValueBound::F64(Bound::Range(range)) => show_slider_for_range(range, ui),
+		ValueBound::Str { include: _, values } => {
+			let mut to_remove = None;
+			let mut return_rebuild = false;
+
+			for (idx, value) in values.iter_mut().enumerate() {
+				ui.horizontal(|ui| {
+					return_rebuild |= ui
+						.text_edit_singleline(value)
+						.ctx
+						.input(|state| state.key_pressed(Key::Enter));
+
+					if ui.button("❌").clicked() {
+						to_remove = Some(idx);
+					}
+				});
+			}
+
+			if let Some(remove) = to_remove {
+				values.remove(remove);
+				return_rebuild = true;
+			}
+
+			let mut new_val = String::new();
+			ui.text_edit_singleline(&mut new_val);
+			if !new_val.is_empty() {
+				values.push(new_val);
+			}
+
+			return return_rebuild;
+		}
 		_ => ()
 	}
+
+	false
 }

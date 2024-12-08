@@ -1,11 +1,11 @@
 use std::ops::Range;
 
 use fxhash::FxHashMap;
-use merde::{CowStr, ValueType};
+use merde::ValueType;
 
 pub struct Settings<'keys> {
-	pub bounds: FxHashMap<CowStr<'static>, ValueBound>,
-	pub x_axis: Vec<CowStr<'static>>,
+	pub bounds: FxHashMap<String, ValueBound>,
+	pub x_axis: Vec<String>,
 	pub y_axis: YAxisKey<'keys>,
 	pub max_shown: usize
 }
@@ -79,7 +79,7 @@ pub enum ValueBound {
 	F64(Bound<f64>),
 	Str {
 		include: Inclusion,
-		values: Vec<CowStr<'static>>
+		values: Vec<String>
 	},
 	Bool(bool)
 }
