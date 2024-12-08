@@ -251,8 +251,7 @@ fn show_bounds_for_ty(
 fn show_bounds_configurations(bound: &mut ValueBound, ui: &mut egui::Ui) -> bool {
 	fn show_slider_for_range<N: Numeric>(range: &mut Range<N>, ui: &mut egui::Ui) {
 		ui.add(Slider::new(&mut range.start, N::MIN..=range.end));
-		let end = range.end;
-		ui.add(Slider::new(&mut range.end, end..=N::MAX));
+		ui.add(Slider::new(&mut range.end, range.start..=N::MAX));
 	}
 
 	match bound {
