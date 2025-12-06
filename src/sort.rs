@@ -6,8 +6,7 @@ use crate::settings::Settings;
 
 pub fn sort_arr(vec: &mut [merde::Map], settings: &Settings) {
 	vec.sort_unstable_by(|a, b| {
-		for key in &settings.x_axis {
-			let key = &key.as_str().into();
+		for key in &settings.selected_keys {
 			let a = &a[key];
 			let b = &b[key];
 

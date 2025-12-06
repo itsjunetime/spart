@@ -1,31 +1,66 @@
-use std::ops::Range;
+use core::ops::{Not, Range};
 
-use fxhash::FxHashMap;
-use merde::ValueType;
+use merde::{CowStr, ValueType};
+use smallvec::SmallVec;
 
-pub struct Settings<'keys> {
-	pub bounds: FxHashMap<String, ValueBound>,
-	pub x_axis: Vec<String>,
-	pub y_axis: YAxisKey<'keys>,
+use crate::app::{FxHashMap, MAX_ENUM_VARIANTS};
+
+type SelectedKeys = SmallVec<[CowStr<'static>; 3]>;
+
+pub struct Settings {
+	pub bounds: FxHashMap<CowStr<'static>, ValueBound>,
+	pub selected_keys: SelectedKeys,
+	pub y_axis: YAxisKey,
 	pub max_shown: usize
 }
 
-impl Default for Settings<'_> {
+impl Default for Settings {
 	fn default() -> Self {
 		Self {
 			bounds: FxHashMap::default(),
-			x_axis: Vec::new(),
+			selected_keys: const { SelectedKeys::new_const() },
 			y_axis: YAxisKey::default(),
 			max_shown: usize::MAX
 		}
 	}
 }
 
+#[derive(Debug, Copy, Clone)]
+pub enum AccumulatableType {
+	F64,
+	U64,
+	I64
+}
+
 #[derive(Default)]
-pub enum YAxisKey<'keys> {
+pub enum YAxisKey {
 	#[default]
 	Count,
-	Key(&'keys str)
+	SumKey(CowStr<'static>, AccumulatableType)
+}
+
+impl YAxisKey {
+	pub fn to_variant(&self) -> YAxisKeyVariant {
+		match self {
+			Self::Count => YAxisKeyVariant::Count,
+			Self::SumKey(_, _) => YAxisKeyVariant::SumKey
+		}
+	}
+}
+
+#[derive(Debug, PartialEq, Copy, Clone)]
+pub enum YAxisKeyVariant {
+	Count,
+	SumKey
+}
+
+impl YAxisKeyVariant {
+	pub fn ui_descriptor(&self) -> &'static str {
+		match self {
+			Self::Count => "Simple Counting",
+			Self::SumKey => "Sum values by key",
+		}
+	}
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -66,10 +101,20 @@ impl<T> Default for Bound<T> {
 	}
 }
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug, Copy)]
 pub enum Inclusion {
 	Include,
 	Exclude
+}
+
+impl Not for Inclusion {
+	type Output = Self;
+	fn not(self) -> Self::Output {
+		match self {
+			Self::Include => Self::Exclude,
+			Self::Exclude => Self::Include
+		}
+	}
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -77,7 +122,10 @@ pub enum ValueBound {
 	I64(Bound<i64>),
 	U64(Bound<u64>),
 	F64(Bound<f64>),
-	Str {
+	EnumStr {
+		values: SmallVec<[(CowStr<'static>, Inclusion); MAX_ENUM_VARIANTS]>
+	},
+	AnyStr {
 		include: Inclusion,
 		values: Vec<String>
 	},
@@ -102,11 +150,11 @@ impl ValueBound {
 			ValueBound::F64(Bound::specifics(Inclusion::Include))
 		];
 		static STR_ARR: &[ValueBound] = &[
-			ValueBound::Str {
+			ValueBound::AnyStr {
 				include: Inclusion::Include,
 				values: vec![]
 			},
-			ValueBound::Str {
+			ValueBound::AnyStr {
 				include: Inclusion::Exclude,
 				values: vec![]
 			}
@@ -140,7 +188,7 @@ impl ValueBound {
 				include: Inclusion::Exclude,
 				..
 			})
-			| ValueBound::Str {
+			| ValueBound::AnyStr {
 				include: Inclusion::Exclude,
 				..
 			} => "Exclude Values",
@@ -156,10 +204,11 @@ impl ValueBound {
 				include: Inclusion::Include,
 				..
 			})
-			| ValueBound::Str {
+			| ValueBound::AnyStr {
 				include: Inclusion::Include,
 				..
 			} => "Include Values",
+			ValueBound::EnumStr { .. } => "List Filter",
 			ValueBound::Bool(true) => "true",
 			ValueBound::Bool(false) => "false"
 		}

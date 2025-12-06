@@ -1,21 +1,32 @@
-use std::{
-	collections::hash_map::Entry,
-	ops::{Deref, Range}
-};
+use std::{borrow::Cow, ops::{Deref, Range}};
 
 use eframe::{
 	egui::{self, Align, ComboBox, Key, Layout, Slider, UiBuilder, Vec2b},
 	emath::Numeric
 };
 use egui_plot::{Bar, BarChart, Plot};
-use fxhash::FxHashMap;
-use merde::ValueType;
+use merde::{CowStr, Value, ValueType};
+use smallvec::SmallVec;
 
 use crate::{
 	bars::make_bars,
-	settings::{Bound, Settings, ValueBound},
+	settings::{AccumulatableType, Bound, Inclusion, Settings, ValueBound, YAxisKey, YAxisKeyVariant},
 	sort::sort_arr
 };
+
+pub type FxHashMap<K, V> = hashbrown::HashMap<K, V, fxhash::FxBuildHasher>;
+
+pub const MAX_ENUM_VARIANTS: usize = 12;
+const EXPECTED_SPOTIFY_KEYS: usize = 24;
+
+type EnumValues = SmallVec<[CowStr<'static>; MAX_ENUM_VARIANTS]>;
+
+#[derive(Debug)]
+struct KeyData {
+	name: CowStr<'static>,
+	ty: ValueType,
+	enum_values: EnumValues
+}
 
 pub struct App {
 	// We could try to do zero-copy deserialization, but it'll be much easier to work with if we
@@ -28,8 +39,10 @@ pub struct App {
 	// Invariant: Each `Map` inside this vec has the same schema, and contains no nested data
 	// structures - no inner `Map`s or `Array`s. It is also not empty.
 	data: Vec<merde::Map<'static>>,
-	keys: Vec<(String, ValueType)>,
-	settings: Settings<'static>,
+
+	// 24 is based on the number of keys normally in the spotify all-time data
+	keys: SmallVec<[KeyData; EXPECTED_SPOTIFY_KEYS]>,
+	settings: Settings,
 	pub bars: Vec<Bar>
 }
 
@@ -79,15 +92,38 @@ impl App {
 			}
 		}
 
-		let mut keys: Vec<(String, _)> = first
+		let mut keys: SmallVec<[KeyData; EXPECTED_SPOTIFY_KEYS]> = first
 			.iter()
-			.map(|(k, v)| (k.to_string(), v.value_type()))
+			.map(|(k, v)| {
+				let mut enum_values = SmallVec::new();
+
+				let value = v.value_type();
+
+				if value == ValueType::String {
+					for val in &data {
+						if let Some(Value::Str(s)) = val.get(k) && !enum_values.contains(s) {
+							if enum_values.len() == MAX_ENUM_VARIANTS {
+								enum_values.clear();
+								break;
+							}
+
+							enum_values.push(s.to_owned());
+						}
+					}
+				}
+
+				KeyData {
+					name: k.to_owned(),
+					ty: v.value_type(),
+					enum_values
+				}
+			})
 			.collect();
 
 		// sort_by_key requires returning a &str that borrows from the passed-in CowStr and the
 		// lifetimes aren't friendly with that.
 		#[allow(clippy::unnecessary_sort_by)]
-		keys.sort_unstable_by(|(a, _), (b, _)| (**a).cmp(&**b));
+		keys.sort_unstable_by(|a, b| a.name.cmp(&b.name));
 
 		Ok(Self {
 			data,
@@ -98,23 +134,23 @@ impl App {
 	}
 
 	pub fn add_key(
-		key: String,
+		key: CowStr<'static>,
 		bars: &mut Vec<Bar>,
 		data: &mut [merde::Map<'static>],
 		settings: &mut Settings
 	) {
-		settings.x_axis.push(key);
+		settings.selected_keys.push(key);
 		Self::rebuild_bars(bars, data, settings);
 	}
 
 	pub fn remove_key(
-		key: &String,
+		key: &CowStr<'static>,
 		bars: &mut Vec<Bar>,
 		data: &mut [merde::Map<'static>],
 		settings: &mut Settings
 	) {
-		if let Some(idx) = settings.x_axis.iter().position(|k| k == key) {
-			settings.x_axis.remove(idx);
+		if let Some(idx) = settings.selected_keys.iter().position(|k| k == key) {
+			settings.selected_keys.remove(idx);
 		}
 		Self::rebuild_bars(bars, data, settings);
 	}
@@ -148,19 +184,19 @@ impl eframe::App for App {
 			ui.vertical(|ui| {
 				ui.heading("Keys");
 
-				for (key, _) in &self.keys {
-					let selected = self.settings.x_axis.contains(key);
-					if ui.radio(selected, key.deref()).clicked() {
+				for KeyData { name, .. } in &self.keys {
+					let selected = self.settings.selected_keys.contains(name);
+					if ui.radio(selected, name.deref()).clicked() {
 						if selected {
 							Self::remove_key(
-								key,
+								name,
 								&mut self.bars,
 								&mut self.data,
 								&mut self.settings
 							);
 						} else {
 							Self::add_key(
-								key.clone(),
+								name.clone(),
 								&mut self.bars,
 								&mut self.data,
 								&mut self.settings
@@ -180,20 +216,20 @@ impl eframe::App for App {
 				ui.heading("Bounds");
 
 				let mut update_bars = false;
-				for (key, ty) in &self.keys {
-					ComboBox::from_label(&**key)
+				for KeyData { name, ty, enum_values } in &self.keys {
+					ComboBox::from_label(&**name)
 						.selected_text(
 							self.settings
 								.bounds
-								.get(key)
+								.get(name)
 								.map_or("None", ValueBound::ui_descriptor)
 						)
 						.show_ui(ui, |ui| {
 							update_bars |=
-								show_bounds_for_ty(ui, key, *ty, &mut self.settings.bounds)
+								show_bounds_for_ty(ui, name, *ty, &mut self.settings.bounds, enum_values)
 						});
 
-					if let Some(bound) = self.settings.bounds.get_mut(key) {
+					if let Some(bound) = self.settings.bounds.get_mut(name) {
 						update_bars |= show_bounds_configurations(bound, ui);
 					}
 				}
@@ -201,13 +237,71 @@ impl eframe::App for App {
 				if update_bars {
 					Self::rebuild_bars(&mut self.bars, &mut self.data, &mut self.settings);
 				}
+
+				let first_available_key = match &self.settings.y_axis {
+					YAxisKey::SumKey(n, ty) => Some((n, *ty)),
+					YAxisKey::Count => self.keys.iter()
+						.find_map(|k| {
+							println!("looking at key {k:#?}");
+							match k.ty {
+								ValueType::U64 => Some((&k.name, AccumulatableType::U64)),
+								ValueType::Float => Some((&k.name, AccumulatableType::F64)),
+								ValueType::I64 => Some((&k.name, AccumulatableType::I64)),
+								_ => None
+							}
+						})
+				};
+
+				println!("first_available_key is {first_available_key:#?}");
+
+				if let Some((key_name, key_ty)) = first_available_key {
+					ui.heading("Measuring");
+
+					let mut current_y_variant = self.settings.y_axis.to_variant();
+					ComboBox::from_label("Method")
+						.selected_text(current_y_variant.ui_descriptor())
+						.show_ui(ui, |ui| {
+							for var in [YAxisKeyVariant::Count, YAxisKeyVariant::SumKey] {
+								ui.selectable_value(
+									&mut current_y_variant,
+									var,
+									var.ui_descriptor()
+								);
+							}
+						});
+
+					match (current_y_variant, &self.settings.y_axis) {
+						(YAxisKeyVariant::Count, YAxisKey::SumKey(_, _)) => self.settings.y_axis = YAxisKey::Count,
+						(YAxisKeyVariant::SumKey, YAxisKey::Count) =>
+							self.settings.y_axis = YAxisKey::SumKey(key_name.to_owned(), key_ty),
+						_ => ()
+					}
+
+					if let YAxisKey::SumKey(y_axis_name, y_axis_ty) = &mut self.settings.y_axis {
+						for KeyData { name, ty, enum_values: _ } in &self.keys {
+							let mut y_axis_radio = |ty: AccumulatableType| {
+								if ui.radio(y_axis_name == name, &**name).clicked() {
+									*y_axis_name = name.to_owned();
+									*y_axis_ty = ty;
+								}
+							};
+
+							match ty {
+								ValueType::U64 => y_axis_radio(AccumulatableType::U64),
+								ValueType::Float => y_axis_radio(AccumulatableType::F64),
+								ValueType::I64 => y_axis_radio(AccumulatableType::I64),
+								_ => ()
+							}
+						}
+					}
+				}
 			});
 
 			if !self.bars.is_empty() {
 				Plot::new(id).show(&mut ui, |ui| {
 					let bars = self.bars[..self.settings.max_shown.min(self.bars.len())].to_vec();
 					ui.set_auto_bounds(Vec2b::TRUE);
-					ui.bar_chart(BarChart::new(bars))
+					ui.bar_chart(BarChart::new("Plot", bars))
 				});
 			}
 		});
@@ -217,32 +311,30 @@ impl eframe::App for App {
 #[must_use]
 fn show_bounds_for_ty(
 	ui: &mut egui::Ui,
-	key: &String,
+	key: &CowStr<'static>,
 	ty: ValueType,
-	bounds: &mut FxHashMap<String, ValueBound>
+	bounds: &mut FxHashMap<CowStr<'static>, ValueBound>,
+	enum_values: &EnumValues
 ) -> bool {
-	let mut current = bounds.get(key).cloned();
+	let mut current = bounds.get(key).map(Cow::Borrowed);
 	let available_bounds = ValueBound::base_options_for(ty);
+	// TODO: switch to using selectable_labels so that we can delay cloning stuff
 	for b in available_bounds {
-		ui.selectable_value(&mut current, Some(b.clone()), b.ui_descriptor());
+		ui.selectable_value(&mut current, Some(Cow::Owned(b.clone())), b.ui_descriptor());
 	}
+	if !enum_values.is_empty() && ui.label("Select from list").clicked() {
+		current = Some(Cow::Owned(ValueBound::EnumStr {
+			values: enum_values.iter().map(|s| (s.clone(), Inclusion::Include)).collect()
+		}));
+	}
+
 	ui.selectable_value(&mut current, None, "None");
 
-	match (bounds.entry(key.clone()), current) {
-		(Entry::Occupied(e), None) => {
-			e.remove();
-			true
-		}
-		(Entry::Occupied(mut e), Some(current)) => {
-			if current != *e.get() {
-				e.insert(current);
-				return true;
-			}
-			false
-		}
-		(Entry::Vacant(_), None) => false,
-		(Entry::Vacant(e), Some(current)) => {
-			e.insert(current);
+	match current {
+		None => bounds.remove(key).is_some(),
+		Some(Cow::Borrowed(_)) => false,
+		Some(Cow::Owned(b)) => {
+			bounds.insert(key.clone(), b);
 			true
 		}
 	}
@@ -258,7 +350,7 @@ fn show_bounds_configurations(bound: &mut ValueBound, ui: &mut egui::Ui) -> bool
 		ValueBound::I64(Bound::Range(range)) => show_slider_for_range(range, ui),
 		ValueBound::U64(Bound::Range(range)) => show_slider_for_range(range, ui),
 		ValueBound::F64(Bound::Range(range)) => show_slider_for_range(range, ui),
-		ValueBound::Str { include: _, values } => {
+		ValueBound::AnyStr { include: _, values } => {
 			let mut to_remove = None;
 			let mut return_rebuild = false;
 
@@ -287,6 +379,13 @@ fn show_bounds_configurations(bound: &mut ValueBound, ui: &mut egui::Ui) -> bool
 			}
 
 			return return_rebuild;
+		}
+		ValueBound::EnumStr { values } => {
+			for (name, inclusion) in values {
+				ui.horizontal(|ui| {
+					ui.radio_value(inclusion, !*inclusion, &**name);
+				});
+			}
 		}
 		_ => ()
 	}
