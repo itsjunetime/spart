@@ -1,4 +1,4 @@
-use core::ops::{Not, Range};
+use core::{fmt::Debug, ops::{Not, Range}};
 
 use merde::{CowStr, ValueType};
 use smallvec::SmallVec;
@@ -79,7 +79,7 @@ impl<T> Bound<T> {
 
 	pub fn excludes(&self, val: &T) -> bool
 	where
-		T: PartialEq + PartialOrd
+		T: PartialEq + PartialOrd + Debug
 	{
 		match self {
 			Self::Range(range) => !range.contains(val),

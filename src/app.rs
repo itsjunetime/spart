@@ -1,3 +1,4 @@
+use core::{fmt::Debug, ops::BitOrAssign};
 use std::{borrow::Cow, ops::{Deref, Range}};
 
 use eframe::{
@@ -215,7 +216,7 @@ impl eframe::App for App {
 
 				ui.heading("Bounds");
 
-				let mut update_bars = false;
+				let mut update_bars = NeedsRebuild::No;
 				for KeyData { name, ty, enum_values } in &self.keys {
 					ComboBox::from_label(&**name)
 						.selected_text(
@@ -234,25 +235,17 @@ impl eframe::App for App {
 					}
 				}
 
-				if update_bars {
-					Self::rebuild_bars(&mut self.bars, &mut self.data, &mut self.settings);
-				}
 
 				let first_available_key = match &self.settings.y_axis {
 					YAxisKey::SumKey(n, ty) => Some((n, *ty)),
 					YAxisKey::Count => self.keys.iter()
-						.find_map(|k| {
-							println!("looking at key {k:#?}");
-							match k.ty {
-								ValueType::U64 => Some((&k.name, AccumulatableType::U64)),
-								ValueType::Float => Some((&k.name, AccumulatableType::F64)),
-								ValueType::I64 => Some((&k.name, AccumulatableType::I64)),
-								_ => None
-							}
+						.find_map(|k| match k.ty {
+							ValueType::U64 => Some((&k.name, AccumulatableType::U64)),
+							ValueType::Float => Some((&k.name, AccumulatableType::F64)),
+							ValueType::I64 => Some((&k.name, AccumulatableType::I64)),
+							_ => None
 						})
 				};
-
-				println!("first_available_key is {first_available_key:#?}");
 
 				if let Some((key_name, key_ty)) = first_available_key {
 					ui.heading("Measuring");
@@ -270,11 +263,16 @@ impl eframe::App for App {
 							}
 						});
 
-					match (current_y_variant, &self.settings.y_axis) {
-						(YAxisKeyVariant::Count, YAxisKey::SumKey(_, _)) => self.settings.y_axis = YAxisKey::Count,
+					let new_y_key = match (current_y_variant, &self.settings.y_axis) {
+						(YAxisKeyVariant::Count, YAxisKey::SumKey(_, _)) => Some(YAxisKey::Count),
 						(YAxisKeyVariant::SumKey, YAxisKey::Count) =>
-							self.settings.y_axis = YAxisKey::SumKey(key_name.to_owned(), key_ty),
-						_ => ()
+							Some(YAxisKey::SumKey(key_name.to_owned(), key_ty)),
+						_ => None
+					};
+
+					if let Some(new_key) = new_y_key {
+						self.settings.y_axis = new_key;
+						update_bars = NeedsRebuild::Yes;
 					}
 
 					if let YAxisKey::SumKey(y_axis_name, y_axis_ty) = &mut self.settings.y_axis {
@@ -294,6 +292,10 @@ impl eframe::App for App {
 							}
 						}
 					}
+				}
+
+				if let NeedsRebuild::Yes = update_bars {
+					Self::rebuild_bars(&mut self.bars, &mut self.data, &mut self.settings);
 				}
 			});
 
@@ -315,12 +317,16 @@ fn show_bounds_for_ty(
 	ty: ValueType,
 	bounds: &mut FxHashMap<CowStr<'static>, ValueBound>,
 	enum_values: &EnumValues
-) -> bool {
+) -> NeedsRebuild {
 	let mut current = bounds.get(key).map(Cow::Borrowed);
 	let available_bounds = ValueBound::base_options_for(ty);
+
 	// TODO: switch to using selectable_labels so that we can delay cloning stuff
 	for b in available_bounds {
-		ui.selectable_value(&mut current, Some(Cow::Owned(b.clone())), b.ui_descriptor());
+		let is_current = current.as_ref().is_some_and(|c| &**c == b);
+		if ui.selectable_label(is_current, b.ui_descriptor()).clicked() && !is_current {
+			current = Some(Cow::Owned(b.clone()));
+		}
 	}
 	if !enum_values.is_empty() && ui.label("Select from list").clicked() {
 		current = Some(Cow::Owned(ValueBound::EnumStr {
@@ -331,35 +337,65 @@ fn show_bounds_for_ty(
 	ui.selectable_value(&mut current, None, "None");
 
 	match current {
-		None => bounds.remove(key).is_some(),
-		Some(Cow::Borrowed(_)) => false,
+		None => match bounds.remove(key) {
+			Some(_) => NeedsRebuild::Yes,
+			None => NeedsRebuild::No
+		},
+		Some(Cow::Borrowed(_)) => NeedsRebuild::No,
 		Some(Cow::Owned(b)) => {
 			bounds.insert(key.clone(), b);
-			true
+			NeedsRebuild::Yes
 		}
 	}
 }
 
-fn show_bounds_configurations(bound: &mut ValueBound, ui: &mut egui::Ui) -> bool {
-	fn show_slider_for_range<N: Numeric>(range: &mut Range<N>, ui: &mut egui::Ui) {
+#[derive(Copy, Clone)]
+enum NeedsRebuild {
+	Yes,
+	No
+}
+
+impl BitOrAssign for NeedsRebuild {
+	fn bitor_assign(&mut self, rhs: Self) {
+		*self = match (*self, rhs) {
+			(Self::Yes, _) | (_, Self::Yes) => Self::Yes,
+			(Self::No, Self::No) => Self::No
+		}
+	}
+}
+
+fn show_bounds_configurations(bound: &mut ValueBound, ui: &mut egui::Ui) -> NeedsRebuild {
+	#[must_use]
+	fn show_slider_for_range<N: Numeric + Debug>(range: &mut Range<N>, ui: &mut egui::Ui) -> NeedsRebuild {
+		let start = range.clone();
 		ui.add(Slider::new(&mut range.start, N::MIN..=range.end));
 		ui.add(Slider::new(&mut range.end, range.start..=N::MAX));
+
+		if start == *range {
+			NeedsRebuild::No
+		} else {
+			NeedsRebuild::Yes
+		}
 	}
 
+	let mut return_rebuild = NeedsRebuild::No;
+
 	match bound {
-		ValueBound::I64(Bound::Range(range)) => show_slider_for_range(range, ui),
-		ValueBound::U64(Bound::Range(range)) => show_slider_for_range(range, ui),
-		ValueBound::F64(Bound::Range(range)) => show_slider_for_range(range, ui),
+		ValueBound::I64(Bound::Range(range)) => return_rebuild = show_slider_for_range(range, ui),
+		ValueBound::U64(Bound::Range(range)) => return_rebuild = show_slider_for_range(range, ui),
+		ValueBound::F64(Bound::Range(range)) => return_rebuild = show_slider_for_range(range, ui),
 		ValueBound::AnyStr { include: _, values } => {
 			let mut to_remove = None;
-			let mut return_rebuild = false;
 
 			for (idx, value) in values.iter_mut().enumerate() {
 				ui.horizontal(|ui| {
-					return_rebuild |= ui
+					if ui
 						.text_edit_singleline(value)
 						.ctx
-						.input(|state| state.key_pressed(Key::Enter));
+						.input(|state| state.key_pressed(Key::Enter))
+					{
+						return_rebuild = NeedsRebuild::Yes;
+					}
 
 					if ui.button("❌").clicked() {
 						to_remove = Some(idx);
@@ -369,7 +405,7 @@ fn show_bounds_configurations(bound: &mut ValueBound, ui: &mut egui::Ui) -> bool
 
 			if let Some(remove) = to_remove {
 				values.remove(remove);
-				return_rebuild = true;
+				return_rebuild = NeedsRebuild::Yes;
 			}
 
 			let mut new_val = String::new();
@@ -377,18 +413,21 @@ fn show_bounds_configurations(bound: &mut ValueBound, ui: &mut egui::Ui) -> bool
 			if !new_val.is_empty() {
 				values.push(new_val);
 			}
-
-			return return_rebuild;
 		}
 		ValueBound::EnumStr { values } => {
 			for (name, inclusion) in values {
 				ui.horizontal(|ui| {
+					let old = *inclusion;
 					ui.radio_value(inclusion, !*inclusion, &**name);
+
+					if *inclusion != old {
+						return_rebuild = NeedsRebuild::Yes
+					}
 				});
 			}
 		}
 		_ => ()
 	}
 
-	false
+	return_rebuild
 }
