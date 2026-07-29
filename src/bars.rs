@@ -1,5 +1,3 @@
-use std::ops::Deref;
-
 use egui_plot::Bar;
 use merde::{CowStr, Value};
 use ordered_float::OrderedFloat;
@@ -21,18 +19,15 @@ pub fn make_bars(data: &[merde::Map], settings: &Settings) -> Vec<Bar> {
 		let exclude = settings
 			.bounds
 			.iter()
-			.filter_map(|(key, bound)| {
-				val.get(key).map(|field| (field, bound))
-			})
+			.filter_map(|(key, bound)| val.get(key).map(|field| (field, bound)))
 			.any(|(field, bound)| match (field, bound) {
 				(Value::I64(val), ValueBound::I64(bound)) => bound.excludes(val),
 				(Value::U64(val), ValueBound::U64(bound)) => bound.excludes(val),
-				(Value::Float(val), ValueBound::F64(bound)) =>
-					bound.excludes(&val.into_inner()),
+				(Value::Float(val), ValueBound::F64(bound)) => bound.excludes(&val.into_inner()),
 				(Value::Bool(val), ValueBound::Bool(bound)) => val != bound,
 				(Value::Str(val), ValueBound::AnyStr { include, values }) => match include {
-					Inclusion::Include => !values.iter().any(|s| s == val.deref()),
-					Inclusion::Exclude => values.iter().any(|s| s == val.deref())
+					Inclusion::Include => !values.iter().any(|s| s == &**val),
+					Inclusion::Exclude => values.iter().any(|s| s == &**val)
 				},
 				(Value::Str(val), ValueBound::EnumStr { values }) => values
 					.iter()
@@ -49,25 +44,18 @@ pub fn make_bars(data: &[merde::Map], settings: &Settings) -> Vec<Bar> {
 		!exclude
 	});
 
-
 	let mut bars = match &settings.y_axis {
 		YAxisKey::Count => make_bars_with_accumulator(filtered, settings, || CountAccumulator(0)),
 		YAxisKey::SumKey(key, ty) => match ty {
-			AccumulatableType::F64 => make_bars_with_accumulator(
-				filtered,
-				settings,
-				|| KeyAccumulator { key, value: 0.0 }
-			),
-			AccumulatableType::U64 => make_bars_with_accumulator(
-				filtered,
-				settings,
-				|| KeyAccumulator { key, value: 0u64 }
-			),
-			AccumulatableType::I64 => make_bars_with_accumulator(
-				filtered,
-				settings,
-				|| KeyAccumulator { key, value: 0i64 }
-			),
+			AccumulatableType::F64 => make_bars_with_accumulator(filtered, settings, || {
+				KeyAccumulator { key, value: 0.0 }
+			}),
+			AccumulatableType::U64 => make_bars_with_accumulator(filtered, settings, || {
+				KeyAccumulator { key, value: 0u64 }
+			}),
+			AccumulatableType::I64 => make_bars_with_accumulator(filtered, settings, || {
+				KeyAccumulator { key, value: 0i64 }
+			})
 		}
 	};
 

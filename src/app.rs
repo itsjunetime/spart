@@ -1,5 +1,8 @@
-use core::{fmt::Debug, ops::BitOrAssign};
-use std::{borrow::Cow, ops::{Deref, Range}};
+use core::{
+	fmt::Debug,
+	ops::{BitOrAssign, Range}
+};
+use std::borrow::Cow;
 
 use eframe::{
 	egui::{self, Align, ComboBox, Key, Layout, Slider, UiBuilder, Vec2b},
@@ -11,12 +14,16 @@ use smallvec::SmallVec;
 
 use crate::{
 	bars::make_bars,
-	settings::{AccumulatableType, Bound, Inclusion, Settings, ValueBound, YAxisKey, YAxisKeyVariant},
+	settings::{
+		AccumulatableType, Bound, Inclusion, Settings, ValueBound, YAxisKey, YAxisKeyVariant
+	},
 	sort::sort_arr
 };
 
 pub type FxHashMap<K, V> = hashbrown::HashMap<K, V, fxhash::FxBuildHasher>;
 
+// the maximum number of unique values that we'll allow for a given key before we consider it a
+// 'string' instead of an 'enum'
 pub const MAX_ENUM_VARIANTS: usize = 12;
 const EXPECTED_SPOTIFY_KEYS: usize = 24;
 
@@ -102,7 +109,9 @@ impl App {
 
 				if value == ValueType::String {
 					for val in &data {
-						if let Some(Value::Str(s)) = val.get(k) && !enum_values.contains(s) {
+						if let Some(Value::Str(s)) = val.get(k)
+							&& !enum_values.contains(s)
+						{
 							if enum_values.len() == MAX_ENUM_VARIANTS {
 								enum_values.clear();
 								break;
@@ -121,9 +130,6 @@ impl App {
 			})
 			.collect();
 
-		// sort_by_key requires returning a &str that borrows from the passed-in CowStr and the
-		// lifetimes aren't friendly with that.
-		#[allow(clippy::unnecessary_sort_by)]
 		keys.sort_unstable_by(|a, b| a.name.cmp(&b.name));
 
 		Ok(Self {
@@ -172,8 +178,8 @@ impl App {
 }
 
 impl eframe::App for App {
-	fn update(&mut self, ctx: &eframe::egui::Context, _frame: &mut eframe::Frame) {
-		egui::CentralPanel::default().show(ctx, |ui| {
+	fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+		egui::CentralPanel::default().show(ui, |ui| {
 			let (id, rect) = ui.allocate_space(ui.available_size());
 			let builder = UiBuilder::new()
 				.id_salt(id)
@@ -187,7 +193,7 @@ impl eframe::App for App {
 
 				for KeyData { name, .. } in &self.keys {
 					let selected = self.settings.selected_keys.contains(name);
-					if ui.radio(selected, name.deref()).clicked() {
+					if ui.radio(selected, &**name).clicked() {
 						if selected {
 							Self::remove_key(
 								name,
@@ -217,7 +223,12 @@ impl eframe::App for App {
 				ui.heading("Bounds");
 
 				let mut update_bars = NeedsRebuild::No;
-				for KeyData { name, ty, enum_values } in &self.keys {
+				for KeyData {
+					name,
+					ty,
+					enum_values
+				} in &self.keys
+				{
 					ComboBox::from_label(&**name)
 						.selected_text(
 							self.settings
@@ -226,8 +237,13 @@ impl eframe::App for App {
 								.map_or("None", ValueBound::ui_descriptor)
 						)
 						.show_ui(ui, |ui| {
-							update_bars |=
-								show_bounds_for_ty(ui, name, *ty, &mut self.settings.bounds, enum_values)
+							update_bars |= show_bounds_for_ty(
+								ui,
+								name,
+								*ty,
+								&mut self.settings.bounds,
+								enum_values
+							);
 						});
 
 					if let Some(bound) = self.settings.bounds.get_mut(name) {
@@ -235,16 +251,14 @@ impl eframe::App for App {
 					}
 				}
 
-
 				let first_available_key = match &self.settings.y_axis {
 					YAxisKey::SumKey(n, ty) => Some((n, *ty)),
-					YAxisKey::Count => self.keys.iter()
-						.find_map(|k| match k.ty {
-							ValueType::U64 => Some((&k.name, AccumulatableType::U64)),
-							ValueType::Float => Some((&k.name, AccumulatableType::F64)),
-							ValueType::I64 => Some((&k.name, AccumulatableType::I64)),
-							_ => None
-						})
+					YAxisKey::Count => self.keys.iter().find_map(|k| match k.ty {
+						ValueType::U64 => Some((&k.name, AccumulatableType::U64)),
+						ValueType::Float => Some((&k.name, AccumulatableType::F64)),
+						ValueType::I64 => Some((&k.name, AccumulatableType::I64)),
+						_ => None
+					})
 				};
 
 				if let Some((key_name, key_ty)) = first_available_key {
@@ -276,10 +290,15 @@ impl eframe::App for App {
 					}
 
 					if let YAxisKey::SumKey(y_axis_name, y_axis_ty) = &mut self.settings.y_axis {
-						for KeyData { name, ty, enum_values: _ } in &self.keys {
+						for KeyData {
+							name,
+							ty,
+							enum_values: _
+						} in &self.keys
+						{
 							let mut y_axis_radio = |ty: AccumulatableType| {
 								if ui.radio(y_axis_name == name, &**name).clicked() {
-									*y_axis_name = name.to_owned();
+									name.clone_into(y_axis_name);
 									*y_axis_ty = ty;
 								}
 							};
@@ -303,7 +322,7 @@ impl eframe::App for App {
 				Plot::new(id).show(&mut ui, |ui| {
 					let bars = self.bars[..self.settings.max_shown.min(self.bars.len())].to_vec();
 					ui.set_auto_bounds(Vec2b::TRUE);
-					ui.bar_chart(BarChart::new("Plot", bars))
+					ui.bar_chart(BarChart::new("Plot", bars));
 				});
 			}
 		});
@@ -330,7 +349,10 @@ fn show_bounds_for_ty(
 	}
 	if !enum_values.is_empty() && ui.label("Select from list").clicked() {
 		current = Some(Cow::Owned(ValueBound::EnumStr {
-			values: enum_values.iter().map(|s| (s.clone(), Inclusion::Include)).collect()
+			values: enum_values
+				.iter()
+				.map(|s| (s.clone(), Inclusion::Include))
+				.collect()
 		}));
 	}
 
@@ -366,7 +388,10 @@ impl BitOrAssign for NeedsRebuild {
 
 fn show_bounds_configurations(bound: &mut ValueBound, ui: &mut egui::Ui) -> NeedsRebuild {
 	#[must_use]
-	fn show_slider_for_range<N: Numeric + Debug>(range: &mut Range<N>, ui: &mut egui::Ui) -> NeedsRebuild {
+	fn show_slider_for_range<N: Numeric + Debug>(
+		range: &mut Range<N>,
+		ui: &mut egui::Ui
+	) -> NeedsRebuild {
 		let start = range.clone();
 		ui.add(Slider::new(&mut range.start, N::MIN..=range.end));
 		ui.add(Slider::new(&mut range.end, range.start..=N::MAX));
@@ -414,18 +439,17 @@ fn show_bounds_configurations(bound: &mut ValueBound, ui: &mut egui::Ui) -> Need
 				values.push(new_val);
 			}
 		}
-		ValueBound::EnumStr { values } => {
+		ValueBound::EnumStr { values } =>
 			for (name, inclusion) in values {
 				ui.horizontal(|ui| {
 					let old = *inclusion;
 					ui.radio_value(inclusion, !*inclusion, &**name);
 
 					if *inclusion != old {
-						return_rebuild = NeedsRebuild::Yes
+						return_rebuild = NeedsRebuild::Yes;
 					}
 				});
-			}
-		}
+			},
 		_ => ()
 	}
 

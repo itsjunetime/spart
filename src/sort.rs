@@ -1,4 +1,4 @@
-use std::{cmp::Ordering, ops::Deref};
+use std::cmp::Ordering;
 
 use merde::Value;
 
@@ -23,9 +23,9 @@ pub fn sort_arr(vec: &mut [merde::Map], settings: &Settings) {
 				(Value::I64(a), Value::I64(b)) => if_not_equal!(&a, &b),
 				(Value::U64(a), Value::U64(b)) => if_not_equal!(&a, &b),
 				(Value::Float(a), Value::Float(b)) => if_not_equal!(&a, &b),
-				(Value::Str(a), Value::Str(b)) => if_not_equal!(&a.deref(), &b.deref()),
+				(Value::Str(a), Value::Str(b)) => if_not_equal!(&**a, &**b),
 				(Value::Bool(a), Value::Bool(b)) => if_not_equal!(&a, &b),
-				(Value::Bytes(a), Value::Bytes(b)) => if_not_equal!(&a.deref(), &b.deref()),
+				(Value::Bytes(a), Value::Bytes(b)) => if_not_equal!(&**a, &**b),
 				(Value::Null, Value::Null) => return Ordering::Equal,
 				(Value::Null, _) => return Ordering::Less,
 				(_, Value::Null) => return Ordering::Greater,

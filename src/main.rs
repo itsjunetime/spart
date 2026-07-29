@@ -1,6 +1,6 @@
 use app::App;
 use eframe::egui;
-use merde::{IntoStatic, json::from_str};
+use merde::{IntoStatic as _, json::from_str};
 
 mod app;
 mod bars;
@@ -26,11 +26,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 	eframe::run_native(
 		"Spart",
 		options,
-		Box::new(move |_| {
-			App::new(deserialized)
-				.map(|a| Box::new(a) as _)
-				.map_err(|e| Box::new(e) as _)
-		})
+		Box::new(move |_| Ok(Box::new(App::new(deserialized)?)))
 	)?;
 
 	Ok(())

@@ -1,9 +1,12 @@
-use core::{fmt::Debug, ops::{Not, Range}};
+use core::{
+	fmt::Debug,
+	ops::{Not, Range}
+};
 
 use merde::{CowStr, ValueType};
 use smallvec::SmallVec;
 
-use crate::app::{FxHashMap, MAX_ENUM_VARIANTS};
+use crate::app::FxHashMap;
 
 type SelectedKeys = SmallVec<[CowStr<'static>; 3]>;
 
@@ -55,10 +58,10 @@ pub enum YAxisKeyVariant {
 }
 
 impl YAxisKeyVariant {
-	pub fn ui_descriptor(&self) -> &'static str {
+	pub fn ui_descriptor(self) -> &'static str {
 		match self {
 			Self::Count => "Simple Counting",
-			Self::SumKey => "Sum values by key",
+			Self::SumKey => "Sum values by key"
 		}
 	}
 }
@@ -123,7 +126,9 @@ pub enum ValueBound {
 	U64(Bound<u64>),
 	F64(Bound<f64>),
 	EnumStr {
-		values: SmallVec<[(CowStr<'static>, Inclusion); MAX_ENUM_VARIANTS]>
+		/// Just choosing 4 in case it's a small enum. I know that that's less than
+		/// `MAX_ENUM_VARIANTS`.
+		values: SmallVec<[(CowStr<'static>, Inclusion); 4]>
 	},
 	AnyStr {
 		include: Inclusion,
@@ -165,7 +170,7 @@ impl ValueBound {
 			ValueType::U64 => U64_ARR,
 			ValueType::Float => F64_ARR,
 			ValueType::String => STR_ARR,
-			ValueType::Bool => &[ValueBound::Bool(true), ValueBound::Bool(false)],
+			ValueType::Bool => &[Self::Bool(true), Self::Bool(false)],
 			ValueType::Bytes | ValueType::Null => &[],
 			_ => unreachable!("These values should've been checked by this point")
 		}
@@ -173,44 +178,44 @@ impl ValueBound {
 
 	pub fn ui_descriptor(&self) -> &'static str {
 		match self {
-			ValueBound::I64(Bound::Range(_))
-			| ValueBound::U64(Bound::Range(_))
-			| ValueBound::F64(Bound::Range(_)) => "Range",
-			ValueBound::I64(Bound::Specifics {
+			Self::I64(Bound::Range(_))
+			| Self::U64(Bound::Range(_))
+			| Self::F64(Bound::Range(_)) => "Range",
+			Self::I64(Bound::Specifics {
 				include: Inclusion::Exclude,
 				..
 			})
-			| ValueBound::U64(Bound::Specifics {
+			| Self::U64(Bound::Specifics {
 				include: Inclusion::Exclude,
 				..
 			})
-			| ValueBound::F64(Bound::Specifics {
+			| Self::F64(Bound::Specifics {
 				include: Inclusion::Exclude,
 				..
 			})
-			| ValueBound::AnyStr {
+			| Self::AnyStr {
 				include: Inclusion::Exclude,
 				..
 			} => "Exclude Values",
-			ValueBound::I64(Bound::Specifics {
+			Self::I64(Bound::Specifics {
 				include: Inclusion::Include,
 				..
 			})
-			| ValueBound::U64(Bound::Specifics {
+			| Self::U64(Bound::Specifics {
 				include: Inclusion::Include,
 				..
 			})
-			| ValueBound::F64(Bound::Specifics {
+			| Self::F64(Bound::Specifics {
 				include: Inclusion::Include,
 				..
 			})
-			| ValueBound::AnyStr {
+			| Self::AnyStr {
 				include: Inclusion::Include,
 				..
 			} => "Include Values",
-			ValueBound::EnumStr { .. } => "List Filter",
-			ValueBound::Bool(true) => "true",
-			ValueBound::Bool(false) => "false"
+			Self::EnumStr { .. } => "List Filter",
+			Self::Bool(true) => "true",
+			Self::Bool(false) => "false"
 		}
 	}
 }
